@@ -12,7 +12,23 @@ build.py                renders per-tool variants under generated/ (gitignored)
 generated/              built each ansible run — do not edit
 configs/<tool>/         curated global settings, synced to ~/.<tool> (see below)
 merge_codex_config.py   overlays curated codex prefs onto its local config.toml
+vendored/<source>/      third-party skill bundles, tracked as-is (see below)
 ```
+
+## Vendored skills
+
+`vendored/` holds pre-built, third-party skill packages (SKILL.md + their own
+`references/`, already in the shape a coding agent expects) that don't go
+through `build.py`. The `coding_agents` role finds every `SKILL.md` under
+`vendored/` and symlinks its parent directory into `~/.claude/skills/<name>`
+and `~/.codex/skills/<name>`, same as the generated ones, so they're present
+on every host that provisions from this repo.
+
+`vendored/grafana-skills/` is the official Grafana skills marketplace
+(grafana-core, grafana-datasources, grafana-k6, grafana-lgtm,
+grafana-plugins — PromQL, dashboarding, alerting/IRM, Alloy, k6, Loki,
+Mimir, Tempo, Pyroscope, plugin development, etc.). To update it, re-vendor
+the upstream `skills/` tree into `vendored/grafana-skills/` and commit.
 
 Most sources are subagents. `mode: primary` sources additionally get a Skill
 variant (Claude Code / Codex / Pi) so interactive workflows can run in the main
