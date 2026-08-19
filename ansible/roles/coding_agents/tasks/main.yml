@@ -233,6 +233,34 @@
   loop_control:
     label: "{{ item.path | basename }}"
 
+- name: Discover vendored skills (e.g. Grafana)
+  find:
+    paths: "{{ coding_agents_source_dir }}/vendored"
+    patterns: "SKILL.md"
+    recurse: true
+    file_type: file
+  register: ca_vendored_skill_files
+
+- name: Symlink vendored skills into Claude Code
+  file:
+    src: "{{ item.path | dirname }}"
+    dest: "~/.claude/skills/{{ item.path | dirname | basename }}"
+    state: link
+    force: true
+  loop: "{{ ca_vendored_skill_files.files }}"
+  loop_control:
+    label: "{{ item.path | dirname | basename }}"
+
+- name: Symlink vendored skills into Codex
+  file:
+    src: "{{ item.path | dirname }}"
+    dest: "~/.codex/skills/{{ item.path | dirname | basename }}"
+    state: link
+    force: true
+  loop: "{{ ca_vendored_skill_files.files }}"
+  loop_control:
+    label: "{{ item.path | dirname | basename }}"
+
 - name: Discover generated Codex agents
   find:
     paths: "{{ coding_agents_source_dir }}/generated/codex/agents"
