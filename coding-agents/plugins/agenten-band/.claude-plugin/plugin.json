@@ -1,0 +1,9 @@
+{
+  "name": "agenten-band",
+  "version": "0.1.0",
+  "description": "Subtle band above the prompt: how many agents are running, and a green \"Bereit\" frame once everything is done.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Max Lechner"
+  }
+}

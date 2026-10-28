@@ -1,0 +1,13 @@
+{
+  "name": "configs",
+  "description": "Personal Claude Code plugins and mods from this configs repo.",
+  "owner": {
+    "name": "Max Lechner"
+  },
+  "plugins": [
+    {
+      "name": "agenten-band",
+      "source": "./coding-agents/plugins/agenten-band"
+    }
+  ]
+}

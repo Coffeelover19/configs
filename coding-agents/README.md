@@ -13,6 +13,7 @@ generated/              built each ansible run — do not edit
 configs/<tool>/         curated global settings, synced to ~/.<tool> (see below)
 merge_codex_config.py   overlays curated codex prefs onto its local config.toml
 vendored/<source>/      third-party skill bundles, tracked as-is (see below)
+plugins/<name>/         Claude Code plugins/mods, installed via the repo marketplace
 ```
 
 ## Vendored skills
@@ -35,6 +36,23 @@ variant (Claude Code / Codex / Pi) so interactive workflows can run in the main
 thread. `mode: skill` sources are *pure* skills — guidance the main agent loads
 while doing the work itself (e.g. `writing-tests`) — and emit no agent files;
 the ansible role also skips them for opencode, which has no skill concept.
+
+## Claude Code plugins (`plugins/`)
+
+`plugins/<name>/` holds Claude Code plugins, including mods (plugins with a
+hooks module that change Claude's own interface or behaviour). They are not
+provisioned by Ansible: the repo root's `.claude-plugin/marketplace.json` lists
+them, and they are installed per machine from a terminal session:
+
+```
+/plugin install <name> --marketplace Coffeelover19/configs
+```
+
+Add a new plugin by putting its folder here and adding an entry to
+`marketplace.json`. Check with `claude plugin validate .` (repo root) and
+`claude plugin validate coding-agents/plugins/<name>`.
+
+- `agenten-band` — band above the prompt: running agents, green "Bereit" frame when done.
 
 ## Codex account switching
 
