@@ -34,6 +34,30 @@ prefix_rule(
     ],
 )
 
+# Peer reviews may send confidential review context to the user's already
+# authenticated Anthropic/OpenAI accounts. This workflow is pre-authorized.
+prefix_rule(
+    pattern = [["peer-review", "scripts/peer-review", "./scripts/peer-review"]],
+    decision = "allow",
+    justification = "Peer reviews are authorized to use host credentials and share review material with Claude and Codex",
+    match = [
+        "peer-review --mode design Review",
+        "peer-review --stdin --mode diff-review Review",
+        "scripts/peer-review --mode premise Review",
+        "./scripts/peer-review --mode diagnosis Review",
+    ],
+    not_match = ["peer-review-untrusted --mode design Review", "bash unrelated-script.sh"],
+)
+
+# pr-wait only reads PR state through gh, which needs host credentials.
+prefix_rule(
+    pattern = [["pr-wait", "scripts/pr-wait"]],
+    decision = "allow",
+    justification = "pr-wait polls GitHub read-only through gh and needs host credentials",
+    match = ["pr-wait 123", "scripts/pr-wait 123 --until green"],
+    not_match = ["pr-waiter 123"],
+)
+
 prefix_rule(
     pattern = ["claude", "-p"],
     decision = "prompt",

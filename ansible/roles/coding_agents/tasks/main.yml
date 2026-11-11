@@ -42,6 +42,24 @@
     force: true
   tags: [codex]
 
+# Cross-model peer checks route on the *serving* model, not the harness;
+# peer-review resolves that in one place for every agent that asks for a
+# second opinion.
+- name: Install the peer-review cross-model launcher
+  file:
+    src: "{{ repo_root }}/scripts/peer-review"
+    dest: "~/.local/bin/peer-review"
+    state: link
+    force: true
+
+# PR watcher used by the babysit skill (one event line per CI/review/base change).
+- name: Install the pr-wait PR watcher
+  file:
+    src: "{{ repo_root }}/scripts/pr-wait"
+    dest: "~/.local/bin/pr-wait"
+    state: link
+    force: true
+
 - name: Discover Codex custom prompts
   find:
     paths: "{{ coding_agents_source_dir }}/configs/codex/prompts"

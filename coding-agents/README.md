@@ -74,6 +74,35 @@ Use `codex-account use personal` or `codex-account use business` to switch.
 Restart the Codex CLI / IDE session after switching so the process reloads the
 new credentials.
 
+## Peer reviews
+
+`peer-review` (`scripts/peer-review`, linked to `~/.local/bin` by the
+`coding_agents` role) asks a model from the *other* serving family for a
+second opinion. It needs the `claude` or `codex` CLI and `python3`. Bare calls
+ignore stdin; supporting material is explicit:
+
+```sh
+peer-review --mode premise "Do we need a cache for this latency target?"
+peer-review --mode design -f design.md "Review the proposed design"
+git diff | peer-review --stdin --mode diff-review "Intent: add CLI help"
+git diff | peer-review --stdin --mode diff-review --lens murphyjitsu-reviewer "Intent: add CLI help"
+peer-review --recent
+peer-review --show <ID-from-recent>
+```
+
+Modes are `premise`, `diagnosis`, `design` and `diff-review`. `--lens NAME`
+(diff-review only) reviews with the method of reviewer agent `source/NAME.md`,
+so the cross-model pass and the same-model reviewer share one prompt. Reviews
+are saved under `${XDG_CACHE_HOME:-$HOME/.cache}/peer-review`; `--recent` and
+`--show` read them back without another model call. See `peer-review --help`.
+
+Run launcher contract tests with
+`python3 -m unittest discover -s coding-agents -p test_peer_review.py`.
+
+Peer-review calls are pre-authorized in the Claude and Codex command
+allowlists. They send review material to the user's own authenticated Claude
+or Codex account; never put secrets in it.
+
 ## Global tool settings (`configs/`)
 
 Each tool's global config splits into two layers:
