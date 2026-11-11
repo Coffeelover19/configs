@@ -24,6 +24,27 @@ def decision_for(*command: str) -> str | None:
 
 
 class CodexRulesTests(unittest.TestCase):
+    def test_allows_peer_reviews_on_the_host(self) -> None:
+        for launcher in ("peer-review", "scripts/peer-review", "./scripts/peer-review"):
+            with self.subTest(launcher=launcher):
+                self.assertEqual(
+                    decision_for(launcher, "--mode", "design", "Review this design"),
+                    "allow",
+                )
+        self.assertEqual(
+            # execpolicy check accepts parsed argv; shell splitting belongs
+            # to Codex's execution layer, not this CLI subcommand.
+            decision_for("peer-review", "--stdin", "--mode", "diff-review", "Review"),
+            "allow",
+        )
+        self.assertIsNone(decision_for("peer-review-untrusted", "--mode", "design"))
+        self.assertIsNone(decision_for("bash", "unrelated-script.sh"))
+
+    def test_allows_pr_wait_on_the_host(self) -> None:
+        self.assertEqual(decision_for("pr-wait", "123"), "allow")
+        self.assertEqual(decision_for("scripts/pr-wait", "123", "--until", "green"), "allow")
+        self.assertIsNone(decision_for("pr-waiter", "123"))
+
     def test_allows_all_git_commands(self) -> None:
         self.assertEqual(decision_for("git", "status"), "allow")
         self.assertEqual(decision_for("git", "fetch", "origin", "main"), "allow")
@@ -59,12 +80,17 @@ class CodexRulesTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(decision_for(*command), "allow")
 
-    def test_prompts_for_claude_print_mode_only(self) -> None:
+    def test_allows_claude_print_mode_on_the_host(self) -> None:
         self.assertEqual(
             decision_for("claude", "-p", "Review this design"),
-            "prompt",
+            "allow",
         )
         self.assertIsNone(decision_for("claude", "auth", "status"))
+
+    def test_allows_non_activating_nixos_diagnostics_on_the_host(self) -> None:
+        self.assertEqual(decision_for("nixos-option", "services.openssh.enable"), "allow")
+        self.assertEqual(decision_for("nixos-rebuild", "dry-build"), "allow")
+        self.assertIsNone(decision_for("nixos-rebuild", "switch"))
 
     def test_ansible_symlinks_the_rules_directory(self) -> None:
         tasks = ANSIBLE_TASKS.read_text()

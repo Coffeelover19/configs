@@ -932,6 +932,8 @@ class PeerReviewWiringTests(unittest.TestCase):
         for name in (
             "ic",
             "super-review",
+            "deploy-prep",
+            "release-prep",
             "understanding-prs-for-approval",
         ):
             with self.subTest(agent=name):

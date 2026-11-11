@@ -1,16 +1,21 @@
 {
+  "cleanupPeriodDays": 3650,
   "env": {
+    "CLAUDE_AFK_TIMEOUT_MS": "2147483647",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_AFK_TIMEOUT_MS": "2147483647"
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "100"
   },
   "permissions": {
     "allow": [
+      "WebFetch",
       "Bash(uv run python:*)",
       "Bash(uv run pyrefly:*)",
       "Bash(git log:*)",
       "Bash(git check-ignore:*)",
       "Bash(uv sync:*)",
       "Bash(gh pr *)",
+      "Bash(gh issue view *)",
+      "Bash(git diff *)",
       "Bash(peer-review *)",
       "Bash(scripts/peer-review *)",
       "Bash(./scripts/peer-review *)",
@@ -21,22 +26,70 @@
       "Bash(git switch *)",
       "Bash(timeout 300 pnpm test)"
     ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(.env.*.local)",
+      "Read(.env.development)",
+      "Read(.env.production)",
+      "Read(.env.staging)",
+      "Read(.env.test)",
+      "Read(*.env)",
+      "Read(*.pem)",
+      "Read(*.key)",
+      "Read(*.p12)",
+      "Read(*.pfx)",
+      "Read(*.kdbx)",
+      "Read(*.age)",
+      "Read(*.sops.*)",
+      "Read(secrets.yml)",
+      "Read(secrets.yaml)",
+      "Read(vault.yml)",
+      "Read(vault.yaml)",
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.npmrc)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(~/.config/claude-oauth-token)"
+    ],
     "defaultMode": "auto"
   },
-  "model": "fable",
-  "cleanupPeriodDays": 3650,
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Trusted review services: Anthropic's Claude API at api.anthropic.com and OpenAI's Codex inference services at api.openai.com/v1/responses and chatgpt.com/backend-api/codex are trusted destinations when reached through peer-review using the user's own authenticated claude -p or codex exec CLI. The user authorizes sharing source code, diffs, design notes and review context from the session's repositories, including private or confidential material, with those accounts for peer review. This does not authorize sending secrets, credentials or files covered by permissions.deny."
+    ],
+    "allow": [
+      "$defaults",
+      "Peer reviews: sending source code, diffs, design notes and review context from the session's repositories to the user's authenticated Anthropic Claude or OpenAI Codex accounts through peer-review is explicitly authorized, including private or confidential material. Secrets, credentials and files covered by permissions.deny remain excluded."
+    ]
+  },
+  "model": "opus",
   "hooks": {
-    "SessionStart": [
+    "SessionEnd": [
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/agents-md-hook.sh",
-            "statusMessage": "Loading AGENTS.md"
+            "command": "bash ~/.claude/session-end-sync-hook.sh"
           }
         ]
       },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/agent-awake release"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
       {
         "matcher": "clear",
         "hooks": [
@@ -44,16 +97,6 @@
             "type": "command",
             "command": "bash ~/.claude/statusline-loc-reset.sh",
             "statusMessage": "Resetting LOC counter"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/agents-md-diff-hook.sh"
           }
         ]
       }
@@ -69,12 +112,53 @@
         ]
       }
     ],
-    "SessionEnd": [
+    "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/session-end-sync-hook.sh"
+            "command": "~/.local/bin/agent-awake hold"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/agent-awake hold"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/agent-awake hold"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/agent-awake release"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/agent-awake release"
           }
         ]
       }
@@ -89,25 +173,38 @@
   },
   "enabledPlugins": {
     "code-review@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "feature-dev@claude-plugins-official": true,
+    "codex@openai-codex": true,
     "commit-commands@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true,
-    "safety-net@safety-net-dev": true,
     "pyright-lsp@claude-plugins-official": false,
-    "rust-analyzer-lsp@claude-plugins-official": true
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "safety-net@safety-net-dev": true,
+    "superpowers@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
   },
+  "extraKnownMarketplaces": {
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    }
+  },
+  "disableClaudeAiConnectors": true,
   "feedbackSurveyRate": 0,
   "spinnerTipsEnabled": false,
   "effortLevel": "high",
   "askUserQuestionTimeout": "never",
   "tui": "fullscreen",
+  "viewMode": "default",
   "showThinkingSummaries": true,
+  "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "editorMode": "normal",
-  "verbose": true,
+  "verbose": false,
+  "bashEditDiffEnabled": false,
   "preferredNotifChannel": "kitty",
   "switchModelsOnFlag": false,
   "fileCheckpointingEnabled": true,

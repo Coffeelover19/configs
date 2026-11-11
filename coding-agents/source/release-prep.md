@@ -1,5 +1,5 @@
 ---
-description: Use when preparing, sanity-checking, or risk-assessing cutting a release of the Kolai app repos (scripts/release.sh in the infrastructure repo) — before candidates are promoted to the deploy branches and images published.
+description: Use when preparing, sanity-checking, or risk-assessing cutting a release of the Kolai app repos (scripts/release.py in the infrastructure repo) — before candidates are promoted to the deploy branches and images published.
 mode: primary
 permission:
   bash: allow
@@ -11,14 +11,15 @@ permission:
 
 # Release Prep
 
-Assess what cutting a release (`scripts/release.sh`) would actually promote
+Assess what cutting a release (`scripts/release.py`) would actually promote
 and publish — BEFORE anyone runs it. The deliverable is a per-repo shipping
 summary plus blockers, prep steps, and a go/no-go. Do not run
-`scripts/release.sh` itself unless explicitly asked.
+`scripts/release.py` itself unless explicitly asked.
 
 You are the orchestrator. Fan out independent, read-only exploration to
 subagents: backend delta, frontend delta + cross-repo pairing, candidate/CI/
-registry state, env-contract preflight, open infrastructure issues.
+registry state, env-contract preflight, open infrastructure issues, the
+release card.
 Parallelize what doesn't depend on each other; give each agent a bounded
 question and the relevant repo path. You own synthesis and the final
 judgment — and you deliver it only after every delegated analysis has
@@ -29,26 +30,26 @@ returned, or with the missing ones explicitly named as unverified.
 **Read `docs/release-flow.md` in the infrastructure repo first.** Tag
 identities, the candidate/promoted/published distinction, verification
 recipes, and the delta-classification method live there, shared with
-deploy-prep. `scripts/release.sh` and the app repos' workflow files override
+deploy-prep. `scripts/release.py` and the app repos' workflow files override
 it. Paste the relevant facts into subagent prompts instead of letting each
 agent rediscover them.
 
 ## Facts specific to cutting
 
-- `release.sh` always promotes each repo's **newest** candidate on
+- `release.py` always promotes each repo's **newest** candidate on
   `origin/main` — it cannot cut an older one. If the user wants an
   intermediate state, that is a different (manual) operation; flag it.
 - The cut itself changes no host. Hosts pick up the images at their next
   deploy. Most risks therefore bind at deploy time — report them as prep for
-  the next deploy, not as cut blockers. The exception `release.sh` guards
+  the next deploy, not as cut blockers. The exception `release.py` guards
   itself: a backend that declares a required/secret env var
   `ansible/env-contract.yml` does not cover would fail the deploy gate on
   every host, so the preflight refusal is a genuine cut blocker.
 - Both repos are normally cut together and share one `deploy-YY-MM-NNN` tag.
-  Releasing one repo alone (`scripts/release.sh backend-core`) is supported
+  Releasing one repo alone (`scripts/release.py backend-core`) is supported
   but leaves the other repo's `latest` on an older cut — verify the pairing
   tolerates that before recommending it.
-- A candidate already carrying a deploy tag was already cut: `release.sh`
+- A candidate already carrying a deploy tag was already cut: `release.py`
   re-attaches to that build instead of burning a new number. That's a rerun,
   not a new release.
 
@@ -60,30 +61,35 @@ Per app repo (verification recipes in `docs/release-flow.md`): `origin/deploy`
 and the tags pointing at it; the newest candidate on `origin/main`; the
 promoted→candidate range (what ships) and candidate→main (what misses the
 cut). Flag runtime commits that would miss the cut and confirm the cut point
-is intended — main CI may still be running or about to tag.
+is intended — main CI may still be running or about to tag. A Dependabot
+auto-merge triggers no main CI: at the tip it misses the cut until a later
+push is tagged — expected, not red CI.
 
 ### 2. Candidate viability
 
 The main-branch run at each candidate SHA is green; the workflow file at that
-SHA carries the deploy-branch trigger (`release.sh` refuses candidates that
+SHA carries the deploy-branch trigger (`release.py` refuses candidates that
 predate it); no deploy tag sits on the candidate already.
 
-### 3. Env-contract preflight, read-only
+### 3. Preflights, read-only
 
-Run the same check `release.sh` runs (`check_backend_env_contract`) against
-the exact backend candidate tree — it needs a `python3` with PyYAML. Confirm
-the infrastructure checkout is at `origin/main` first: a stale checkout
-validates a contract nobody will deploy. An uncovered required/secret var
-means wiring `ansible/env-contract.yml` before the cut.
+Run `scripts/release.py --check` (needs uv): it runs the release-card gate,
+the env-contract check against the exact backend candidate tree, and the
+frontend-changelog staleness warning without tagging or mutating anything.
+Confirm the infrastructure checkout is at `origin/main` first: a stale
+checkout validates a contract nobody will deploy. An uncovered required/
+secret var means wiring `ansible/env-contract.yml` before the cut; open card
+blockers (sub-issues, or issues the card is marked blocked by) mean
+finish-or-slip before the cut.
 
 ### 4. Classify both deltas
 
 Over promoted→candidate, per the doc's method: migrations, env-var wiring,
-provider-scoped inertness, cross-repo pairing of co-developed features. Note
-new feature flags and their defaults (fail-closed surfaces stay dark until
-provisioned), and rollback tolerance: data the new version moves or backfills
-that the previous image cannot read makes rolling back the *next* deploy
-lossy — say so.
+provider-scoped inertness, cross-repo pairing, feature flags, API surface,
+rollback tolerance. Cut-specific scoping: name which environments each affected
+flag is provisioned in, so a gap is visible before the cut rather than at
+deploy time. The rollback note is handed forward to the card, not acted on
+here — it binds on the deploy that ships this release.
 
 ### 5. Publish-path health
 
@@ -97,18 +103,74 @@ re-verify.
 
 Infrastructure repo: read open issues created since the last cut, plus older
 ones plausibly connected to release/CI/publish state; classify as cut
-blocker, next-deploy prep, or watch-item. App repos: unlike deploy prep, the
-code itself is what's being promoted — check for known regressions filed
-against the shipping range before blessing it.
+blocker, next-deploy prep, or watch-item. Next-deploy prep bound to a change
+in this cut belongs on the card — hand it to step 7 rather than reporting it
+loose. App repos: unlike deploy prep, the code itself is what's being
+promoted — check for known regressions filed against the shipping range
+before blessing it.
 
-### 7. Report
+### 7. Release card
+
+In addition to — never instead of — the steps above, delegate reading the
+release cards (infrastructure issues labeled `release`; conventions in
+`docs/release-flow.md`, "Release cards"). Reconcile the next card against the
+cut boundary: open blockers — sub-issues and blocked-by dependencies alike —
+are hard cut blockers (`release.py` refuses to cut past them — recommend
+finish-or-slip per item). Retitling and closing stay `release.py`'s job.
+
+Collect deploy notes from the shipping PRs — before any tag is pushed. Per
+app repo, resolve the PRs whose commits lie in the exact promoted→candidate
+range via commit→PR association (`gh api
+repos/<org>/<repo>/commits/<sha>/pulls`) — never date or keyword search —
+and copy each non-`None` `## Deploy impact` section into the card's Deploy
+notes with provenance (`repo#PR`, merge SHA), each note naming applicability
+and when it binds. Report coverage: commits in range, PRs resolved,
+unmatched or ambiguous commits, non-`None` sections found. A
+`dependabot[bot]` PR without the section is resolved with an implicit `None`
+— not a coverage gap, nothing to chase (its changes still go through the
+reconcile below). Unmatched
+commits (direct pushes, association failures) are inspected by hand, never
+silently skipped; a revert in the range voids the reverted PR's note — drop
+it and say why. Then reconcile both ways against the classified delta: a
+delta consequence no PR declared is a note to add; a note the delta
+contradicts is flagged — git is the truth. Update the Changelog section
+from the delta analysis as before.
+
+Legacy staging issues (pre-convention): an open infrastructure issue holding
+a deploy note for a change in this cut's delta is the old staged form of the
+note — copy its content into the card body, link the card from the issue,
+and close it as superseded. Discriminate, because most deployment-flavored
+issues are not this: work that outlives the deploy — backfills, alerting,
+provisioning bound to no release — stays open and is merely linked, and an
+issue whose note is only part of its content keeps the remainder.
+
+### 8. Cross-model gate — before the cut recommendation
+
+Facts established, recommendation not yet written. Run one peer check while it
+can still change the answer:
+
+```bash
+peer-review --mode premise --cd <infra-repo> "Cutting <repos> at <candidate tags>. \
+Established: <preflight results, candidate CI, latest-vs-candidate divergence, delta classification, publish-path health, open blocking issues>. \
+Name the failure mode this evidence does not rule out."
+```
+
+Aim it at what a cut can get wrong that a checklist misses: version identity
+across the repo pair, a publish path that is green but stale, deploy-time work
+this cut silently creates, ordering between the two repos. Do not hand it your
+cut/hold verdict.
+
+Fold the result into the report as its own line, naming the model that answered.
+An empty `attempted_falsifications` means the peer left its conclusion untested — say so.
+
+### 9. Report
 
 Risk-ranked: **cut blockers** (preflight refusal, red candidate CI, diverged
 `latest`, blocking issue), **prep before cutting**, **deploy-time prep this
 cut creates** (named as such: env wiring, Flipt flags, migration windows,
 rollback caveats), **watch-items**. Include the per-repo release pair
 (old → new tags), the deploy tag the cut would mint, evidence links, and
-unresolved facts. End with the exact command (`scripts/release.sh [repo ...]`)
+unresolved facts. End with the exact command (`scripts/release.py [repo ...]`)
 and what happens after it: images publish, `latest` moves, hosts pick the
 release up at their next deploy.
 
@@ -124,3 +186,8 @@ release up at their next deploy.
   both `latest` tags should normally come from the same cut.
 - Estimating what ships from commit subjects — read the migrations,
   `.env.example` diffs, and flag wiring.
+- Treating the release card as the delta — the card is intent and notes;
+  git is the truth about what ships.
+- Collecting Deploy impact sections by PR search, titles, or dates —
+  membership comes from the exact commit range; unmatched commits are
+  findings, not noise.

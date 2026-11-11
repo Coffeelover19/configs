@@ -15,9 +15,19 @@
 # (e.g. the old model pin) without leaving stale values on other hosts.
 unmanage = ["model", "model_reasoning_effort"]
 personality = "pragmatic"
+web_search = "live"
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
+# Codex-only additions to the shared AGENTS.md, appended to the system prompt.
+developer_instructions = """
+- Run `gh` commands that need GitHub authentication on the host, outside the workspace sandbox. The `gh` prefix is generally pre-approved; a sandboxed call cannot access the host keyring and will fail with 401.
+- When a needed command fails because the Codex sandbox blocks network access or a destination is absent from its domain allowlist, inspect the command and destination, then retry the narrowest appropriate command with sandbox escalation and a concrete justification. Use automatic review when available. If it denies an action still needed for the task, tell me the command, destination, and stated reason, and ask me for approval; do not work around the denial. For a recurring legitimate destination, also update the shared Codex domain allowlist in the configs repo (`coding-agents/configs/codex/shared.toml`).
+- When you call a Claude peer and `peer-review` reports expired OAuth or another Claude authentication failure inside the sandbox, retry the same call outside the sandbox with the narrowest escalation and a concrete justification. The sandbox may lack access to the host's working Claude login; do not conclude that Claude is unavailable or ask for a new login based on the sandbox error alone. If the host retry also fails, report that failure and use the normal peer fallback.
+"""
+
+[agents]
+max_concurrent_threads_per_session = 16
 
 [sandbox_workspace_write]
 # The merge script expands ~/ paths per host before writing config.toml.
@@ -36,9 +46,76 @@ writable_roots = [
 network_access = true
 
 [features]
-# Add a domain here only when a routine command needs it. Keep this allowlist
-# narrow; `network_access` without the proxy would permit arbitrary egress.
-network_proxy = { enabled = true, domains = { "api.github.com" = "allow", "api.anthropic.com" = "allow" } }
+# Common developer endpoints. Keep this explicit: `network_access` without the
+# proxy would permit arbitrary egress.
+[features.network_proxy]
+enabled = true
+allow_local_binding = true
+
+[features.network_proxy.domains]
+# Codex's own feature-flag endpoint. Not a developer endpoint, but the CLI
+# calls it during normal operation and the proxy denial surfaces as a mid-run
+# choke rather than a clean skip.
+"ab.chatgpt.com" = "allow"
+"api.anthropic.com" = "allow"
+"api.github.com" = "allow"
+"api.openai.com" = "allow"
+"auth.docker.io" = "allow"
+"codeload.github.com" = "allow"
+"cloud-images.ubuntu.com" = "allow"
+"crates.io" = "allow"
+"deb.debian.org" = "allow"
+"files.pythonhosted.org" = "allow"
+"galaxy.ansible.com" = "allow"
+"github-releases.githubusercontent.com" = "allow"
+"github.com" = "allow"
+"golang.org" = "allow"
+"index.crates.io" = "allow"
+"mods.factorio.com" = "allow"
+"objects.githubusercontent.com" = "allow"
+# Public tokenizer vocabularies fetched by tiktoken.
+"openaipublic.blob.core.windows.net" = "allow"
+# Claude CLI authentication/platform requests during peer-review calls.
+"platform.claude.com" = "allow"
+"proxy.golang.org" = "allow"
+"pypi.org" = "allow"
+"raw.githubusercontent.com" = "allow"
+"release-assets.githubusercontent.com" = "allow"
+"registry-1.docker.io" = "allow"
+"registry.npmjs.org" = "allow"
+"releases.hashicorp.com" = "allow"
+"security.debian.org" = "allow"
+"ssh.github.com" = "allow"
+"static.crates.io" = "allow"
+"sum.golang.org" = "allow"
+# Public browser assets used by the local documentation wiki (MathJax, Mermaid).
+"unpkg.com" = "allow"
+# Public shareholder filings used by the PTV research archive.
+"www.porsche-se.com" = "allow"
+# Public university teaching material and primary biomedical sources used by
+# the private longevish wiki; allow only the specific recurring hosts.
+"chem.libretexts.org" = "allow"
+"faculty.washington.edu" = "allow"
+"nap.nationalacademies.org" = "allow"
+"ocw.mit.edu" = "allow"
+"vtechworks.lib.vt.edu" = "allow"
+"www.fda.gov" = "allow"
+"www.itl.nist.gov" = "allow"
+"www.jstage.jst.go.jp" = "allow"
+"www.studservice.uni-kiel.de" = "allow"
+
+# Recurring public curriculum and biomedical teaching sources.
+"darwin.eeb.uconn.edu" = "allow"
+"endotext.org" = "allow"
+"lifelong-learning.ox.ac.uk" = "allow"
+"oyc.yale.edu" = "allow"
+"pharmacologyeducation.org" = "allow"
+"pmc.ncbi.nlm.nih.gov" = "allow"
+"wur-bioinformatics.github.io" = "allow"
+"www.endotext.org" = "allow"
+"www.medizinische-fakultaet-hd.uni-heidelberg.de" = "allow"
+"www.uni-heidelberg.de" = "allow"
+"www.vvz.ethz.ch" = "allow"
 
 [tui]
 status_line = ["model-with-reasoning", "current-dir", "git-branch", "branch-changes", "run-state", "context-used", "five-hour-limit", "weekly-limit", "used-tokens", "total-input-tokens", "total-output-tokens", "task-progress"]

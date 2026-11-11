@@ -19,6 +19,8 @@ confirm_overwrite: true
 username: pars
 cowfile: default
 
+claudex_enabled: true
+
 # network interfaces
 lan: enp10s0
 
