@@ -34,10 +34,52 @@ prefix_rule(
     ],
 )
 
+# Peer reviews may send confidential review context to the user's already
+# authenticated Anthropic/OpenAI accounts. This workflow is pre-authorized.
+prefix_rule(
+    pattern = [["peer-review", "scripts/peer-review", "./scripts/peer-review"]],
+    decision = "allow",
+    justification = "Peer reviews are authorized to use host credentials and share review material with Claude and Codex",
+    match = [
+        "peer-review --mode design Review",
+        "peer-review --stdin --mode diff-review Review",
+        "scripts/peer-review --mode premise Review",
+        "./scripts/peer-review --mode diagnosis Review",
+    ],
+    not_match = ["peer-review-untrusted --mode design Review", "bash unrelated-script.sh"],
+)
+
+# pr-wait only reads PR state through gh, which needs host credentials.
+prefix_rule(
+    pattern = [["pr-wait", "scripts/pr-wait"]],
+    decision = "allow",
+    justification = "pr-wait polls GitHub read-only through gh and needs host credentials",
+    match = ["pr-wait 123", "scripts/pr-wait 123 --until green"],
+    not_match = ["pr-waiter 123"],
+)
+
 prefix_rule(
     pattern = ["claude", "-p"],
-    decision = "prompt",
-    justification = "Claude print mode needs host credential refresh and runs another agent",
+    decision = "allow",
+    justification = "Claude print mode needs host credentials and is an established cross-model workflow",
     match = ["claude -p Review this design"],
     not_match = ["claude auth status"],
+)
+
+# NixOS inspection and non-activating dry builds should not interrupt routine
+# diagnostics. Rebuild actions that can modify the running or booted system
+# remain subject to normal approval handling.
+prefix_rule(
+    pattern = ["nixos-option"],
+    decision = "allow",
+    justification = "nixos-option only reads the evaluated NixOS configuration",
+    match = ["nixos-option services.openssh.enable"],
+)
+
+prefix_rule(
+    pattern = ["nixos-rebuild", "dry-build"],
+    decision = "allow",
+    justification = "nixos-rebuild dry-build does not activate the resulting system",
+    match = ["nixos-rebuild dry-build"],
+    not_match = ["nixos-rebuild switch"],
 )

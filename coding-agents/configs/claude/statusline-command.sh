@@ -2,20 +2,22 @@
 # Claude Code status line — fish-style colors, segments separated by ` | `.
 #
 # Layout (left→right):
-#   cwd | branch | model[effort] | tokens↑/↓ | +N/-N | 5h NN% left<pace> reset | 7d NN% left<pace> <ahead Nh / Nh available>
+#   cwd | branch | model[effort] | tokens↑/↓ | +N/-N | 5h NN% left<pace> reset | 7d NN% left<pace> <diff>
 #
 # Width-adaptive: COLUMNS is re-read every render (tracks live terminal resizes).
 # `model`, the 5h limit, and the git-root cwd are NEVER dropped. As width
 # shrinks, segments are sacrificed in this order:
-#   7d-diff → LOC → tokens → "left" text → branch → trim cwd (toward git root) → 7d → effort
+#   7d-diff → LOC → tokens → "left" text → branch → trim cwd (toward git root)
+#     → 7d → effort
 #
-# Pacing glyph shows burn vs. equidistant pacing of the 5h / 7d limits: how far
+# Pacing glyph shows burn vs. equidistant pacing of each limit window: how far
 # the % used is ahead of (▲, too fast) or behind (▼, headroom) the steady line
-# you'd be on if you spent the window evenly. The "5h/7d NN% left" text stays
+# you'd be on if you spent the window evenly. The "<label> NN% left" text stays
 # blue; only the glyph is colored. The 7d segment also carries a time
 # differential ("ahead Nh" = burning that many hours faster than the steady
 # line, "Nh available" = that much headroom) — same deviation expressed as
 # wall-clock hours over the week. LOC resets on /clear (statusline-loc-reset.sh).
+
 input=$(cat)
 
 # UTF-8 locale so ${#str} counts characters (glyphs, arrows, …), not bytes —
@@ -24,8 +26,10 @@ if locale -a 2>/dev/null | grep -qix 'C.UTF-8'; then export LC_ALL=C.UTF-8
 elif locale -a 2>/dev/null | grep -qix 'en_US.UTF-8'; then export LC_ALL=en_US.UTF-8
 fi
 
-# One jq pass → TSV of every field we need (far cheaper than a fork per field).
-IFS=$'\t' read -r session_id cwd model tok_in tok_out lines_add lines_del \
+# One jq pass → every field we need (far cheaper than a fork per field). Joined
+# on \x1f, not TAB: TAB is IFS whitespace, so `read` would collapse an empty
+# field (e.g. no effort) and shift every column after it.
+IFS=$'\x1f' read -r session_id cwd model tok_in tok_out lines_add lines_del \
   effort rl5_pct rl5_reset rl7_pct rl7_reset < <(
   jq -r '[
     .session_id,
@@ -40,8 +44,31 @@ IFS=$'\t' read -r session_id cwd model tok_in tok_out lines_add lines_del \
     .rate_limits.five_hour.resets_at,
     .rate_limits.seven_day.used_percentage,
     .rate_limits.seven_day.resets_at
-  ] | map(if . == null then "" else . end) | @tsv' <<<"$input"
+  ] | map(if . == null then "" else tostring end) | join("\u001f")' <<<"$input"
 )
+
+# --- rate-limit cache --------------------------------------------------------
+# The payload only carries rate_limits once the session has had an API response,
+# so a fresh session would show no budget at all. Persist the last-seen values
+# and fall back to them until live data arrives. Rewritten only when the values
+# change (no "last seen" stamp), so idle renders across sessions never write.
+# `|`-separated: unlike TAB it is not IFS whitespace, so empty fields survive.
+RL_CACHE="$HOME/.claude/statusline-ratelimits"
+if [ -n "$rl5_pct$rl7_pct" ]; then
+  rl_line="$rl5_pct|$rl5_reset|$rl7_pct|$rl7_reset"
+  if [ "$(cat "$RL_CACHE" 2>/dev/null)" != "$rl_line" ]; then
+    printf '%s\n' "$rl_line" > "$RL_CACHE.$$" 2>/dev/null && mv -f "$RL_CACHE.$$" "$RL_CACHE" 2>/dev/null
+    rm -f "$RL_CACHE.$$" 2>/dev/null
+  fi
+elif [ -r "$RL_CACHE" ]; then
+  IFS='|' read -r rl5_pct rl5_reset rl7_pct rl7_reset < "$RL_CACHE"
+fi
+# A window whose reset has passed (cached or a long-idle session's last payload
+# alike) is over. No 5h window is running until the next request opens one, so
+# drop that segment; the 7d one is simply fully available again.
+now=$(date +%s)
+if [[ "$rl5_reset" =~ ^[0-9]+$ ]] && [ "$rl5_reset" -le "$now" ]; then rl5_pct=""; rl5_reset=""; fi
+if [[ "$rl7_reset" =~ ^[0-9]+$ ]] && [ "$rl7_reset" -le "$now" ]; then rl7_pct=0; rl7_reset=""; fi
 
 abs_cwd="$cwd"   # keep the absolute path for git lookups
 
@@ -265,7 +292,8 @@ actions=(7ddiff loc tokens left branch)
 for ((i=1; i<${#cwd_forms[@]}; i++)); do actions+=(cwd); done   # trim cwd, step by step
 actions+=(7d effort)
 
-show_7ddiff=1 show_loc=1 show_tokens=1 show_left=1 show_branch=1 show_7d=1 show_effort=1 cwd_idx=0
+show_7ddiff=1 show_loc=1 show_tokens=1 show_left=1 show_branch=1 \
+  show_7d=1 show_effort=1 cwd_idx=0
 ai=0
 while [ "$(plain_len)" -gt "$COLS" ] && [ "$ai" -lt "${#actions[@]}" ]; do
   case "${actions[$ai]}" in

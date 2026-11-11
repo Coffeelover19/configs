@@ -12,6 +12,7 @@ build.py                renders per-tool variants under generated/ (gitignored)
 generated/              built each ansible run — do not edit
 configs/<tool>/         curated global settings, synced to ~/.<tool> (see below)
 merge_codex_config.py   overlays curated codex prefs onto its local config.toml
+merge_claude_settings.py overlays curated claude prefs onto its local settings.json
 vendored/<source>/      third-party skill bundles, tracked as-is (see below)
 plugins/<name>/         Claude Code plugins/mods, installed via the repo marketplace
 ```
@@ -54,6 +55,24 @@ Add a new plugin by putting its folder here and adding an entry to
 
 - `agenten-band` — band above the prompt: running agents, green "Bereit" frame when done.
 
+## Grill Me: decision discovery and implementation
+
+[`source/grill-me.md`](source/grill-me.md) is the canonical pure skill for
+an ongoing research/design workstream with close user oversight. It combines
+dependency-frontier rounds, independently generated peer options, and durable capture so decisions survive
+long sessions and become individually accepted implementation tasks. The main
+session keeps interviewing and the architecture overview while orchestrating
+small, constrained steps. It retains IC's exploration, external research,
+planning, and review depth. IC is a mostly autonomous full process taking a single
+task through exploration and a few manual decisions to implementation and PR;
+grill-me keeps developing the workstream as individual steps finish.
+"Branches" here means **decision branches**, not Git branches.
+
+See the source for the interview and handoff protocol. Captures live in
+`docs/brainstorms/YYYY-MM-DD-topic.md`; after implementation, lasting what/why
+belongs in relevant maintained docs as well. Keep detailed captures by default,
+and commit them before optional removal so Git history preserves the process.
+
 ## Codex account switching
 
 `scripts/codex-account` snapshots file-based Codex credentials into
@@ -74,6 +93,59 @@ Use `codex-account use personal` or `codex-account use business` to switch.
 Restart the Codex CLI / IDE session after switching so the process reloads the
 new credentials.
 
+## GPT-5.6 in Claude Code (`claudex`)
+
+On hosts with `claudex_enabled: true` in their `host_vars`, the `coding_agents`
+role installs a pinned CLIProxyAPI release and the `claudex` launcher. `claudex`
+keeps the normal Claude Code harness but routes its model tiers through a
+loopback-only proxy:
+
+- Opus -> GPT-5.6 Sol
+- Sonnet -> GPT-5.6 Terra
+- Haiku -> GPT-5.6 Luna
+
+Each host needs its own one-time Codex OAuth login:
+
+```sh
+claudex --login
+claudex
+```
+
+The OAuth state and generated local proxy key stay under
+`~/.config/cliproxyapi/` and are never synced. Plain `claude` and `codex` remain
+unchanged. CLIProxyAPI is a third-party compatibility layer, so a Claude Code or
+Codex protocol change may require bumping the pinned proxy release and rerunning
+the role.
+
+## Peer reviews
+
+`peer-review` (`scripts/peer-review`, linked to `~/.local/bin` by the
+`coding_agents` role) asks a model from the *other* serving family for a
+second opinion. It needs the `claude` or `codex` CLI and `python3`. Bare calls
+ignore stdin; supporting material is explicit:
+
+```sh
+peer-review --mode premise "Do we need a cache for this latency target?"
+peer-review --mode design -f design.md "Review the proposed design"
+git diff | peer-review --stdin --mode diff-review "Intent: add CLI help"
+git diff | peer-review --stdin --mode diff-review --lens murphyjitsu-reviewer "Intent: add CLI help"
+peer-review --recent
+peer-review --show <ID-from-recent>
+```
+
+Modes are `premise`, `diagnosis`, `design` and `diff-review`. `--lens NAME`
+(diff-review only) reviews with the method of reviewer agent `source/NAME.md`,
+so the cross-model pass and the same-model reviewer share one prompt. Reviews
+are saved under `${XDG_CACHE_HOME:-$HOME/.cache}/peer-review`; `--recent` and
+`--show` read them back without another model call. See `peer-review --help`.
+
+Run launcher contract tests with
+`python3 -m unittest discover -s coding-agents -p test_peer_review.py`.
+
+Peer-review calls are pre-authorized in the Claude and Codex command
+allowlists. They send review material to the user's own authenticated Claude
+or Codex account; never put secrets in it.
+
 ## Global tool settings (`configs/`)
 
 Each tool's global config splits into two layers:
@@ -87,7 +159,7 @@ Each tool's global config splits into two layers:
 
 | Tool     | Tracked (curated)        | Synced to                          | Mechanism               | Local-only (untracked)                            |
 | -------- | ------------------------ | ---------------------------------- | ----------------------- | ------------------------------------------------- |
-| Claude   | `claude/settings.json`   | `~/.claude/settings.json`          | symlink                 | `~/.claude/settings.local.json`                   |
+| Claude   | `claude/settings.json`   | `~/.claude/settings.json`          | merge                   | installer-owned hooks and local settings           |
 | OpenCode | `opencode/opencode.json`, `opencode/tui.json`, `opencode/plugins/` | `~/.config/opencode/` | symlink | env-var secrets |
 | Copilot  | `copilot/settings.json`  | `~/.copilot/settings.json`         | symlink                 | `~/.copilot/config.json` (trustedFolders, login)  |
 | Codex    | `codex/shared.toml`, `codex/rules/` | `~/.codex/config.toml`, `~/.codex/rules/` | merge + directory symlink | the rest of `~/.codex/config.toml` |
@@ -129,6 +201,23 @@ global instructions file: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and
 `AGENTS.md`; Claude uses `CLAUDE.md`). Edit it in one place and all three pick
 it up on the next role run. This repo is public — keep it free of host-specific
 or secret content.
+
+## Writing prompt rules
+
+Applies to `source/*.md` and `configs/shared/AGENTS.md` alike. Every line is read
+on every run, and low-value rules cost more than tokens: they dilute the ones that
+matter, and literal-minded models over-apply them.
+
+- **A rule must earn its tokens.** Add one for a failure that actually happens,
+  ideally with evidence (an incident, or a grep of past transcripts under
+  `~/.claude/projects/` and `~/.codex/sessions/`). Don't add one for a failure the
+  model doesn't exhibit.
+- **Say it once.** Global rules in `configs/shared/AGENTS.md` reach every agent;
+  don't restate them in an agent, only add what is specific to its step.
+- **Specific habits, not generic exhortation.** "Reproduce on the base commit before
+  calling a failure pre-existing" changes behavior; "double-check your work" adds
+  cost without it. Give the *why* in a clause when it isn't obvious.
+- **Prune.** When editing, cut what no longer pulls its weight.
 
 ## Creating a new agent or skill
 

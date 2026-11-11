@@ -1,0 +1,622 @@
+#!/bin/sh
+# Ask a peer model from a *different serving family* to attack a claim.
+#
+# The routing decision that matters is the serving model, not the harness:
+# `claudex` runs GPT-5.6 inside the Claude Code harness, so a session that
+# routes on harness name alone can send GPT to `codex exec` and get GPT
+# reviewing GPT while reporting it as a cross-model check.
+#
+# Usage:
+#   peer-review [--mode MODE] [--cd DIR] [--from FAMILY] [--model M] BRIEF
+#   git diff ... | peer-review --stdin --mode diff-review --cd "$PWD" "Intent: ..."
+#
+# Review MODE is premise | diagnosis | design | diff-review (default: premise).
+# Use --models [--include-self] for inference-free model discovery.
+# Supporting material requires --stdin or -f FILE. Emits one JSON object:
+#   {"peer_cli": ..., "peer_model": ..., "peer_family": ..., "result": {...}}
+
+set -eu
+
+mode="premise"
+lens=""
+workdir=""
+from_family=""
+peer_model=""
+help_requested=false
+input_sources=""
+material_file=""
+schema_file=""
+result_file=""
+err_file=""
+combined_file=""
+include_self=false
+list_models=false
+history_action=""
+history_value=""
+history_all=false
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/peer-review"
+trap 'rm -f "$input_sources" "$material_file" "$schema_file" "$result_file" \
+    "$err_file" "$combined_file"' EXIT INT TERM
+# Strip these only for a real Anthropic peer; self discovery keeps its provider.
+proxy_env_vars="ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL
+ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL
+ANTHROPIC_DEFAULT_HAIKU_MODEL _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"
+
+fail() {
+    printf 'peer-review: %s\n' "$*" >&2
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) help_requested=true; shift; break ;;
+        --mode) mode="${2:?--mode needs a value}"; shift 2 ;;
+        --lens) lens="${2:?--lens needs a reviewer name}"; shift 2 ;;
+        --cd) workdir="${2:?--cd needs a value}"; shift 2 ;;
+        --from) from_family="${2:?--from needs a value}"; shift 2 ;;
+        --model) peer_model="${2:?--model needs a value}"; shift 2 ;;
+        --stdin)
+            [ -n "$input_sources" ] || input_sources=$(mktemp)
+            printf '%s\0' --stdin >>"$input_sources"
+            shift ;;
+        -f|--file)
+            [ -n "$input_sources" ] || input_sources=$(mktemp)
+            printf '%s\0' --file "${2:?--file needs a path}" >>"$input_sources"
+            shift 2 ;;
+        --models) list_models=true; shift ;;
+        --include-self) include_self=true; shift ;;
+        --recent)
+            [ -z "$history_action" ] || fail "choose only one of --recent and --show"
+            history_action=recent; history_value=5; shift
+            case "${1:-}" in
+                [0-9]*) history_value="$1"; shift ;;
+            esac ;;
+        --show)
+            [ -z "$history_action" ] || fail "choose only one of --recent and --show"
+            history_action=show; history_value="${2:?--show needs an ID}"; shift 2 ;;
+        --all) history_all=true; shift ;;
+        --) shift; break ;;
+        -*) fail "unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+
+case "$mode" in
+    premise|diagnosis|design|diff-review) ;;
+    *) fail "unknown mode: $mode (want premise|diagnosis|design|diff-review)" ;;
+esac
+
+# History works without either peer CLI and never consumes inherited stdin.
+[ "$history_all" = false ] || [ "$history_action" = recent ] ||
+    [ "$help_requested" = true ] || fail "--all requires --recent"
+if [ -n "$history_action" ] && [ "$help_requested" = false ]; then
+    [ $# -eq 0 ] && [ -z "$input_sources" ] && [ "$list_models" = false ] &&
+        [ "$include_self" = false ] && [ -z "$peer_model$from_family$lens" ] &&
+        [ "$mode" = premise ] || fail "history does not accept review input or model options"
+    python3 - "$cache_dir" "$history_action" "$history_value" "$history_all" "$workdir" <<'PY'
+import json, re, subprocess, sys
+from pathlib import Path
+
+cache, action, value, all_repos, directory = sys.argv[1:]
+cache = Path(cache)
+try:
+    if action == "show":
+        if not re.fullmatch(r"[0-9a-f]{32}", value):
+            sys.exit("peer-review: invalid review ID (use --recent to list IDs)")
+        path = cache / f"{value}.json"
+        if not path.exists():
+            sys.exit(f"peer-review: no saved review {value}")
+        sys.stdout.write(json.loads(path.read_text())["response"])
+    else:
+        if not value.isascii() or not value.isdecimal() or int(value) < 1:
+            sys.exit("peer-review: --recent count must be a positive integer")
+        directory = str(Path(directory or Path.cwd()).resolve())
+        try:
+            repo = subprocess.run(["git", "-C", directory, "rev-parse", "--show-toplevel"],
+                                  capture_output=True, text=True)
+            if repo.returncode == 0:
+                directory = str(Path(repo.stdout.strip()).resolve())
+        except FileNotFoundError:
+            pass  # Outside Git (or without git), scope to the directory itself.
+        records = []
+        for path in cache.glob("*.json"):
+            try:
+                records.append(json.loads(path.read_text()))
+            except (OSError, ValueError) as exc:
+                print(f"peer-review: skipping unreadable review {path} "
+                      f"({type(exc).__name__})", file=sys.stderr)
+        records = [record for record in records
+                   if all_repos == "true" or record["directory"] == directory]
+        records.sort(key=lambda record: (record["created_at"], record["id"]), reverse=True)
+        for record in records[:int(value)]:
+            output = json.loads(record["response"])
+            result = output["result"]
+            summary = result["verdict"]
+            if result["findings"]:
+                summary += ": " + result["findings"][0]["claim"]
+            elif result["counterproposal"]:
+                summary += ": " + result["counterproposal"]
+            # Listings are deliberately brief; --show preserves every field.
+            brief = " ".join(record["brief"].split())[:160]
+            summary = " ".join(summary.split())[:160]
+            print(f'{record["id"]}  {record["created_at"]}  '
+                  f'{record["directory"]}  {record["mode"]}'
+                  f'{"[" + record["lens"] + "]" if record.get("lens") else ""}  '
+                  f'{output["peer_model"]}')
+            print(f"  Brief: {brief}\n  Outcome: {summary}")
+        if not records:
+            print("No saved reviews." if all_repos == "true" else
+                  f"No saved reviews for {directory}.")
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    sys.exit(f"peer-review: cannot read review history: {type(exc).__name__}")
+PY
+    exit 0
+fi
+
+# --- serving family detection -------------------------------------------
+# Detect what is actually serving this session. claudex points the Anthropic
+# SDK at its own CLIProxyAPI on a fixed loopback port, so that exact endpoint
+# means GPT answers despite the Claude harness. Match only that endpoint: an
+# arbitrary local Anthropic relay is still Claude, and treating it as GPT
+# would route the peer back to the caller's own family.
+#
+# Codex is GPT regardless of harness. Detect it via the per-session vars it
+# actually exports into a spawned shell -- CODEX_SESSION_ID / CODEX_THREAD_ID.
+# CODEX_HOME and CODEX_SANDBOX are NOT set in that shell, so keying on them
+# made every Codex session fall through to "claude" and pick Codex as its own
+# peer. CODEX_HOME may also be exported by a user shell that merely configures
+# Codex, which would misreport a Claude session as GPT; ignore it either way.
+claudex_endpoint="127.0.0.1:8317"
+
+if printf '%s' "${ANTHROPIC_BASE_URL:-}" | grep -qF "$claudex_endpoint"; then
+    detected="gpt"
+    detected_harness="Claude Code (claudex)"
+elif [ -n "${CODEX_SESSION_ID:-}${CODEX_THREAD_ID:-}" ]; then
+    detected="gpt"
+    detected_harness="Codex"
+else
+    detected="claude"
+    if [ -n "${CLAUDECODE:-}" ]; then
+        detected_harness="Claude Code"
+    else
+        detected_harness="unknown (Claude serving family assumed)"
+    fi
+fi
+
+# The override is the escape hatch for when detection is wrong; it declares
+# the caller's OWN family. It cannot be verified, so a disagreement with
+# detection is surfaced in the result rather than silently trusted.
+[ -n "$from_family" ] || from_family="${PEER_REVIEW_FROM:-$detected}"
+
+case "$from_family" in
+    claude) peer_cli="codex"; peer_model="${peer_model:-gpt-6.1-sol}" ;;
+    gpt) peer_cli="claude"; peer_model="${peer_model:-claude-opus-5-5}" ;;
+    *) fail "unknown family: $from_family (want claude|gpt)" ;;
+esac
+
+if [ "$help_requested" = true ]; then
+    cat <<'HELP'
+Usage: peer-review [OPTIONS] BRIEF
+       peer-review --models [--include-self] [--from FAMILY]
+       peer-review --recent [N] [--all] [--cd DIR]
+       peer-review --show ID
+       git diff | peer-review --stdin --mode diff-review --cd "$PWD" "Intent: ..."
+
+Ask a read-only peer from a different serving model family to challenge a brief.
+Options must precede BRIEF. Stdin is ignored unless --stdin is supplied.
+
+Review settings:
+  --mode MODE     Review mode (default: premise):
+                    premise     Challenge assumptions and identify alternatives.
+                    diagnosis   Rank causes and propose falsifying observations.
+                    design      Produce an independent design and tradeoffs.
+                    diff-review Review a supplied diff for correctness and simplicity.
+  --lens NAME     With diff-review: review using reviewer agent NAME's method
+                  (coding-agents/source/NAME.md) instead of the generic pass.
+  --cd DIR        Give the peer access to this directory (review modes only).
+
+Supporting material:
+  --stdin         Append all stdin as supporting material; waits for EOF.
+  -f, --file PATH  Append a file as supporting material (repeatable).
+                  Files and --stdin combine in command-line order, separated
+                  by a newline. diff-review requires at least one input source.
+
+Peer selection:
+  --from FAMILY   Declare the caller's OWN serving family: claude or gpt.
+                  Defaults to PEER_REVIEW_FROM, then automatic detection.
+                  A gpt caller uses Claude; a claude caller uses Codex.
+  --model MODEL   Override the selected peer's model (review modes only).
+                  Defaults: claude-opus-5-5 (Claude), gpt-6.1-sol (Codex).
+
+Model discovery:
+  --models        List the target harness's model catalog; no brief.
+  --include-self  Also list the caller harness's models (with --models).
+                  Outside a harness, list the other CLI's models too.
+
+Saved reviews (no peer invocation):
+  --recent [N]    List newest saved reviews in this repository (default: 5).
+                  Outside Git, scope to the current directory; --cd sets scope.
+                  Each entry shows ID, UTC time, directory, mode, answering
+                  model, brief and a short outcome. Summaries may be truncated.
+  --all           With --recent, list reviews from all repositories/directories.
+  --show ID       Print the complete original JSON response for a saved ID.
+                  Consume the full response before drawing conclusions.
+
+General:
+  -h, --help      Show this help and exit without invoking a peer.
+  --              End options (for a brief beginning with a dash).
+
+Output:
+  One validated JSON object with peer_cli, peer_model, peer_family and result.
+  The result contains verdict, findings, counterproposal,
+  attempted_falsifications and unverified. Errors go to stderr; exit is nonzero.
+  Requires the selected peer CLI and python3. Never include secrets in input.
+  --models emits target (and optional self) catalogs as JSON without a
+  model inference. Catalogs may be cached; entries do not prove account access
+  or validate custom --model IDs. Claude aliases retain their resolved model IDs.
+  Successful reviews are saved before printing under
+  ${XDG_CACHE_HOME:-$HOME/.cache}/peer-review, with private file permissions.
+  Supporting material is not saved separately. Cache failures warn on stderr
+  without discarding the answer. An ID and retrieval command go to stderr.
+
+Examples:
+  peer-review --mode premise "Do we need a cache to meet this latency target?"
+  peer-review --mode diagnosis --cd "$PWD" "The worker exits after its first job."
+  peer-review --mode design -f design.md "Review the proposed design"
+  git diff | peer-review -f design.md --stdin -f notes.md "Review this change"
+  git diff | peer-review --stdin --mode diff-review --cd "$PWD" "Intent: add CLI help"
+  peer-review --models --include-self
+  peer-review --recent 10 --all
+  peer-review --show <ID-from-recent>
+HELP
+    printf '\nCurrent routing:\n'
+    printf '  Detected harness: %s\n' "$detected_harness"
+    printf '  Detected serving family: %s\n' "$detected"
+    printf '  Effective caller family: %s\n' "$from_family"
+    printf '  Target peer: %s (model: %s)\n' "$peer_cli" "$peer_model"
+    exit 0
+fi
+
+# Use the per-command OAuth wrapper even outside fish's PATH setup. Resolve
+# through installed symlinks; self discovery must keep its own provider/auth.
+peer_command="$peer_cli"
+if [ "$peer_cli" = claude ]; then
+    peer_command="$(dirname "$(realpath "$0")")/claude"
+fi
+
+if [ "$list_models" = true ]; then
+    [ $# -eq 0 ] && [ -z "$input_sources$lens" ] ||
+        fail "--models does not accept a brief, --lens, --stdin or --file"
+    python3 - "$peer_cli" "$include_self" "$detected_harness" "$proxy_env_vars" "$peer_command" <<'PY'
+import json, os, subprocess, sys
+
+peer_cli, include_self, harness, proxy_vars, peer_command = sys.argv[1:]
+self_cli = {"Codex": "codex", "Claude Code": "claude",
+            "Claude Code (claudex)": "claude"}.get(
+                harness, "claude" if peer_cli == "codex" else "codex")
+
+def catalog(cli, *, target=False):
+    env = os.environ.copy()
+    if cli == "claude" and target:
+        for name in proxy_vars.split():
+            env.pop(name, None)
+    if cli == "codex":
+        command = [cli, "debug", "models"]
+        request = ""
+    else:
+        command = [cli, "-p", "--input-format", "stream-json",
+                   "--output-format", "stream-json", "--verbose",
+                   "--strict-mcp-config", "--no-session-persistence"]
+        # Initialization discovers models without sending a user message.
+        request = json.dumps({"type": "control_request", "request_id": "peer-models",
+                              "request": {"subtype": "initialize"}}) + "\n"
+    if target:
+        command[0] = peer_command
+    proc = subprocess.run(command, input=request, capture_output=True, text=True, env=env)
+    if proc.returncode:
+        raise ValueError(f"{cli} model discovery failed (exit {proc.returncode})")
+    if cli == "codex":
+        models = [{"id": m["slug"], "display_name": m["display_name"],
+                   "description": m["description"], "visibility": m["visibility"]}
+                  for m in json.loads(proc.stdout)["models"]]
+    else:
+        # Initialize also returns account metadata. Keep the response in memory
+        # and emit only model fields, including on malformed/error responses.
+        response = None
+        for line in proc.stdout.splitlines():
+            event = json.loads(line)
+            if event.get("type") == "control_response":
+                candidate = event["response"]
+                if candidate.get("request_id") == "peer-models":
+                    response = candidate
+                    break
+        if response is None or response.get("subtype") != "success":
+            raise ValueError("claude model discovery returned no successful initialization")
+        models = []
+        for m in response["response"]["models"]:
+            entry = {"id": m["value"], "display_name": m["displayName"],
+                     "description": m["description"]}
+            if "resolvedModel" in m:
+                entry["resolved_model"] = m["resolvedModel"]
+            models.append(entry)
+    return {"cli": cli, "models": models}
+
+try:
+    output = {"target": catalog(peer_cli, target=True)}
+    if include_self == "true":
+        output["self"] = catalog(self_cli)
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    # Do not echo CLI output or initialization values in diagnostics.
+    detail = str(exc) if type(exc) is ValueError else type(exc).__name__
+    sys.exit(f"peer-review: model discovery failed: {detail}")
+json.dump(output, sys.stdout, indent=2)
+print()
+PY
+    exit 0
+fi
+
+[ "$include_self" = false ] || fail "--include-self requires --models"
+lens_file=""
+if [ -n "$lens" ]; then
+    [ "$mode" = diff-review ] || fail "--lens requires --mode diff-review"
+    case "$lens" in
+        *[!a-z0-9-]*) fail "invalid lens name: $lens" ;;
+        reviewer|*-reviewer) ;;
+        *) fail "lens must be a reviewer agent (reviewer or *-reviewer): $lens" ;;
+    esac
+    # Lenses are the reviewer agents' own prompts, so the cross-model pass
+    # and the same-model fleet cannot drift apart.
+    lens_file="$(dirname "$(realpath "$0")")/../coding-agents/source/$lens.md"
+    [ -f "$lens_file" ] || fail "unknown lens: $lens (no coding-agents/source/$lens.md)"
+fi
+[ "$mode" != diff-review ] || [ -n "$input_sources" ] ||
+    fail "diff-review requires --stdin or --file"
+[ $# -ge 1 ] || fail "a brief is required"
+brief="$*"
+
+command -v "$peer_cli" >/dev/null 2>&1 ||
+    fail "peer CLI '$peer_cli' is not installed; skip the pass and say so"
+
+# --- brief ---------------------------------------------------------------
+case "$mode" in
+    premise)
+        task="Challenge the premise of what follows. Identify the smallest credible ways to achieve the stated user-visible outcomes, and name what evidence or constraint would rule each one out. You have NOT been shown a candidate solution; do not invent one to agree with." ;;
+    diagnosis)
+        task="Produce competing causal explanations for the observed symptoms below, ranked by likelihood. For the leading explanation, name the single observation that would falsify it and how to obtain that observation cheaply. Do not propose a fix." ;;
+    design)
+        task="Produce an independent design for the problem below, then state where it differs from the obvious approach and what each difference costs." ;;
+    diff-review)
+        task="Fresh-eyes review of the diff supplied below. Two jobs: (1) correctness findings; (2) a minimalist pass -- name every hunk that could be smaller or simpler with no tradeoff. Use file:line. No praise, no diff echo." ;;
+esac
+if [ -n "$lens_file" ]; then
+    # The method only: drop the frontmatter and the agent's own report format,
+    # which the response schema replaces.
+    method=$(awk 'NR == 1 && /^---$/ { front = 1; next }
+                  front && /^---$/ { front = 0; next }
+                  front { next }
+                  /^## Report/ { exit }
+                  { print }' "$lens_file")
+    task="Fresh-eyes review of the diff supplied below, using only the review method that follows; it replaces a generic correctness and simplicity pass. Ignore its delivery details, such as who hands you what and how to format a report: answer through the response fields. Keep the method's ranking: most likely or most severe first, its top tier as must, middle as should, lowest as nit. Each finding's claim names the failure or defect with file:line and the assumption it rests on, evidence holds the code that grounds it, next_check the patch or test that would settle it. No praise, no diff echo.
+
+Review method:
+$method"
+fi
+
+discipline="Recommend nothing beyond the facts supplied. Do not spawn subagents. Populate attempted_falsifications with what you actually tried in order to break your own conclusions -- an empty list is read as 'did not test', not as 'nothing to find'. Put anything you could not check into unverified."
+
+material_file=$(mktemp) || fail "cannot create temp file"
+schema_file=$(mktemp) || fail "cannot create temp file"
+result_file=$(mktemp) || fail "cannot create temp file"
+if [ -n "$input_sources" ]; then
+    # NUL-delimited options preserve arbitrary file names and their ordering.
+    # Use -c so stdin remains the caller's material, not the Python program.
+    python3 -c '
+import os, shutil, sys
+
+with open(sys.argv[1], "rb") as manifest:
+    sources = iter(manifest.read().split(b"\0")[:-1])
+try:
+    with open(sys.argv[2], "wb") as output:
+        for index, source in enumerate(sources):
+            if index:
+                output.write(b"\n")
+            if source == b"--stdin":
+                shutil.copyfileobj(sys.stdin.buffer, output)
+            else:
+                with open(os.fsdecode(next(sources)), "rb") as material:
+                    shutil.copyfileobj(material, output)
+except OSError as exc:
+    sys.exit(f"peer-review: cannot read material file: {exc.filename}")
+' "$input_sources" "$material_file"
+fi
+
+cat >"$schema_file" <<'SCHEMA'
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "counterproposal", "attempted_falsifications", "unverified"],
+  "properties": {
+    "verdict": {"type": "string", "enum": ["supports", "challenges", "insufficient_evidence"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "claim", "evidence", "next_check"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["must", "should", "nit"]},
+          "claim": {"type": "string"},
+          "evidence": {"type": "string"},
+          "next_check": {"type": "string"}
+        }
+      }
+    },
+    "counterproposal": {"type": "string"},
+    "attempted_falsifications": {"type": "array", "items": {"type": "string"}},
+    "unverified": {"type": "array", "items": {"type": "string"}}
+  }
+}
+SCHEMA
+
+prompt="$task
+
+$brief
+
+$discipline"
+
+# --- run the peer, foreground, read-only, stdin closed -------------------
+# Keep the peer's stderr: swallowing it turns every failure into an opaque
+# "peer failed", which is how a broken flag survived unnoticed.
+err_file=$(mktemp) || fail "cannot create temp file"
+combined_file=$(mktemp) || fail "cannot create temp file"
+peer_failed() {
+    printf 'peer-review: %s\n' "$1" >&2
+    printf -- '--- %s stderr ---\n' "$peer_cli" >&2
+    tail -n 20 "$err_file" >&2
+    exit 1
+}
+
+peer_status=0
+# Keep a Linux laptop awake, lid closed too, while the peer runs (no-op elsewhere).
+command -v agent-awake >/dev/null 2>&1 && agent-awake attach "$$" "peer-review ($peer_cli)"
+if [ "$peer_cli" = "codex" ]; then
+    # codex --output-schema takes a FILE.
+    set -- exec --sandbox read-only \
+        --output-schema "$schema_file" -o "$result_file" -m "$peer_model"
+    [ -n "$workdir" ] && set -- "$@" --cd "$workdir"
+    codex "$@" "$prompt" <"$material_file" >/dev/null 2>"$err_file" ||
+        peer_failed "codex exec failed"
+else
+    # A peer running through claudex would be GPT again. Force real Anthropic.
+    # The wrapper loads host OAuth privately; without it the CLI can still
+    # use ANTHROPIC_API_KEY or its normal stored login.
+    unset $proxy_env_vars
+    # claude --json-schema takes the schema INLINE, not a path -- handing it a
+    # filename fails with "not valid JSON: Unrecognized token '/'".
+    # The prompt goes on stdin, not as a positional: --disallowed-tools is
+    # variadic and would otherwise swallow the prompt as another tool name.
+    # --strict-mcp-config keeps unrelated session MCP servers out of a
+    # one-shot call; the peer reviews, so it must not edit.
+    { printf '%s\n' "$prompt"; cat "$material_file"; } >"$combined_file"
+    # Keep peer availability independent of the interactive model's quota.
+    set -- -p --model "$peer_model" \
+        --json-schema "$(cat "$schema_file")" --output-format json \
+        --strict-mcp-config
+    [ -n "$workdir" ] && set -- "$@" --add-dir "$workdir"
+    set -- "$@" --disallowed-tools "Edit" "Write" "NotebookEdit"
+    "$peer_command" "$@" <"$combined_file" >"$result_file" 2>"$err_file" ||
+        peer_status=$?
+    # Claude reports API errors as JSON on stdout, often with empty stderr.
+    # Keep parsing that result even when the process exits nonzero.
+    if [ "$peer_status" -ne 0 ]; then
+        printf 'peer-review: claude -p failed (exit %s)\n' "$peer_status" >&2
+        tail -n 20 "$err_file" >&2
+    fi
+fi
+
+PEER_CLI="$peer_cli" PEER_FAMILY="$from_family" PEER_MODEL="$peer_model" \
+PEER_DETECTED="$detected" PEER_STATUS="$peer_status" \
+    python3 - "$result_file" "$cache_dir" "$workdir" "$mode" "$brief" "$lens" <<'PY'
+import json, os, subprocess, sys, tempfile, uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+raw = open(sys.argv[1]).read().strip()
+if not raw:
+    sys.exit("peer-review: peer returned nothing")
+
+payload = json.loads(raw)
+
+# codex -o writes the bare answer. `claude --output-format json` emits the
+# whole event stream -- an ARRAY whose final result event carries the answer.
+if isinstance(payload, list):
+    payload = next(
+        (e for e in reversed(payload)
+         if isinstance(e, dict) and e.get("type") == "result"),
+        None,
+    )
+    if payload is None:
+        sys.exit("peer-review: peer emitted no result event")
+
+if isinstance(payload, dict) and "verdict" not in payload:
+    if payload.get("is_error"):
+        details = payload.get("errors") or [payload.get("result") or "no error details"]
+        sys.exit(
+            f"peer-review: peer reported an error ({payload.get('subtype', 'unknown')}): "
+            + "; ".join(details)
+        )
+    usage = payload.get("modelUsage") or {}
+    requested = os.environ["PEER_MODEL"]
+    # Helpers can also appear in modelUsage; ordering is not answer provenance.
+    reported = requested if requested in usage else (
+        next(iter(usage)) if len(usage) == 1 else None
+    )
+    # structured_output is the schema-validated object; `result` is its string.
+    result = payload.get("structured_output")
+    if result is None:
+        result = payload.get("result")
+        if isinstance(result, str):
+            result = json.loads(result)
+else:
+    reported, result = None, payload
+
+if os.environ["PEER_STATUS"] != "0":
+    sys.exit("peer-review: peer exited unsuccessfully; discarding its result")
+
+caller, detected = os.environ["PEER_FAMILY"], os.environ["PEER_DETECTED"]
+out = {
+    "peer_cli": os.environ["PEER_CLI"],
+    "peer_family": "gpt" if caller == "claude" else "claude",
+    "peer_model": reported or os.environ["PEER_MODEL"] or "cli default",
+    "caller_family": caller,
+    "result": result,
+}
+if caller != detected:
+    out["routing_warning"] = (
+        f"caller declared '{caller}' but detection says '{detected}'; "
+        "if the declaration is wrong this peer is the caller's own family"
+    )
+response = json.dumps(out, indent=2) + "\n"
+cache = Path(sys.argv[2])
+temporary = None
+try:
+    directory = str(Path(sys.argv[3] or Path.cwd()).resolve())
+    try:
+        repo = subprocess.run(["git", "-C", directory, "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if repo.returncode == 0:
+            directory = str(Path(repo.stdout.strip()).resolve())
+    except FileNotFoundError:
+        pass
+    record = {
+        "id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f UTC"),
+        "directory": directory,
+        "mode": sys.argv[4],
+        "brief": sys.argv[5],
+        "response": response,
+    }
+    if sys.argv[6]:
+        record["lens"] = sys.argv[6]
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Readers only see complete files; concurrent reviews have separate IDs.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=cache,
+                                     prefix=".review-", delete=False) as handle:
+        temporary = Path(handle.name)
+        json.dump(record, handle, indent=2)
+        handle.write("\n")
+    temporary.replace(cache / f'{record["id"]}.json')
+    temporary = None
+    print(f'peer-review: saved review {record["id"]}; retrieve with: '
+          f'peer-review --show {record["id"]}', file=sys.stderr)
+except OSError as exc:
+    print(f"peer-review: could not save review ({type(exc).__name__}); "
+          "returning answer without a saved copy", file=sys.stderr)
+finally:
+    if temporary is not None:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass  # Cache cleanup must not discard the peer's answer either.
+sys.stdout.write(response)
+PY

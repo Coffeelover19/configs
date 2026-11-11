@@ -42,6 +42,25 @@
     force: true
   tags: [codex]
 
+# Claude hooks call it on every host (settings.json is shared); it exits as a
+# no-op on macOS, where adrafinil does this job.
+- name: Install agent-awake
+  file:
+    src: "{{ repo_root }}/scripts/agent-awake"
+    dest: "~/.local/bin/agent-awake"
+    state: link
+    force: true
+
+# Codex asks once per host, via /hooks, to trust these definitions.
+- name: Link Codex agent-awake hooks
+  file:
+    src: "{{ coding_agents_source_dir }}/configs/codex/hooks.json"
+    dest: "~/.codex/hooks.json"
+    state: link
+    force: true
+  when: ansible_facts['system'] == 'Linux'
+  tags: [codex]
+
 - name: Discover Codex custom prompts
   find:
     paths: "{{ coding_agents_source_dir }}/configs/codex/prompts"
@@ -109,10 +128,7 @@
     state: link
     force: true
   loop:
-    - { src: "claude/settings.json",         dest: "~/.claude/settings.json" }
     - { src: "claude/statusline-command.sh", dest: "~/.claude/statusline-command.sh" }
-    - { src: "claude/agents-md-hook.sh",     dest: "~/.claude/agents-md-hook.sh" }
-    - { src: "claude/agents-md-diff-hook.sh", dest: "~/.claude/agents-md-diff-hook.sh" }
     - { src: "claude/stop-queue-hook.sh",    dest: "~/.claude/stop-queue-hook.sh" }
     - { src: "claude/session-end-sync-hook.sh", dest: "~/.claude/session-end-sync-hook.sh" }
     - { src: "claude/statusline-loc-reset.sh", dest: "~/.claude/statusline-loc-reset.sh" }
@@ -137,13 +153,112 @@
   loop_control:
     label: "{{ item.dest }}"
 
+# Claude settings mix shared preferences with local installer state. Keep the
+# curated source authoritative without letting an installer edit it through a
+# symlink. Adrafinil's marked hooks remain only on hosts where it is enabled.
+- name: Stat legacy Claude settings symlink
+  stat:
+    path: "~/.claude/settings.json"
+  register: ca_claude_settings
+
+- name: Remove legacy Claude settings symlink
+  file:
+    path: "~/.claude/settings.json"
+    state: absent
+  when: ca_claude_settings.stat.islnk | default(false)
+
+- name: Merge curated Claude settings into the local Claude config
+  command:
+    cmd: >-
+      {{ ansible_facts['python']['executable'] }} merge_claude_settings.py
+      {% if adrafinil_enabled | bool %}--preserve-adrafinil-hooks{% endif %}
+  args:
+    chdir: "{{ coding_agents_source_dir }}"
+  register: ca_claude_merge
+  changed_when: ca_claude_merge.stdout.startswith('changed:')
+
+- name: Install Adrafinil's recognised Claude hooks
+  command:
+    cmd: "{{ adrafinil_command }} install-hooks --tool claude-code"
+  when: adrafinil_enabled | bool
+  changed_when: false
+
+- name: Check whether Claude Code is installed
+  command: /bin/sh -c 'command -v claude'
+  register: ca_claude_command
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [claude]
+
+- name: Install the official Codex plugin where Claude Code is available
+  include_tasks:
+    file: claude_codex_plugin.yml
+    apply:
+      tags: [claude]
+  when: ca_claude_command.rc == 0
+  tags: [claude]
+
+- name: Install Claudex
+  include_tasks:
+    file: claudex.yml
+    apply:
+      tags: [claudex]
+  when: claudex_enabled | bool
+  tags: [claudex]
+
+# Cross-model peer checks route on the *serving* model, not the harness: under
+# Claudex the Claude Code harness is served by GPT, so a harness-keyed rule
+# sends GPT to Codex and gets GPT reviewing GPT. peer-review resolves this in
+# one place for every agent that asks for a second opinion.
+- name: Install the peer-review cross-model launcher
+  file:
+    src: "{{ repo_root }}/scripts/peer-review"
+    dest: "~/.local/bin/peer-review"
+    state: link
+    force: true
+
+# PR watcher used by the babysit skill (one event line per CI/review/base change).
+- name: Install the pr-wait PR watcher
+  file:
+    src: "{{ repo_root }}/scripts/pr-wait"
+    dest: "~/.local/bin/pr-wait"
+    state: link
+    force: true
+
+# browser-qa sessions: claude-qa/codex-qa add the browser MCP server per launch
+# (it is registered nowhere else) and attach to the qa-browser instance.
+- name: Install the browser-qa session launchers
+  file:
+    src: "{{ repo_root }}/scripts/{{ ca_qa_script }}"
+    dest: "~/.local/bin/{{ ca_qa_script }}"
+    state: link
+    force: true
+  loop: [qa-browser, claude-qa, codex-qa]
+  loop_control:
+    loop_var: ca_qa_script
+
+# Lives in its own PATH directory (prepended by the fish config) because the
+# native installer owns ~/.local/bin/claude and repoints it on every update.
+- name: Create the Claude token wrapper directory
+  file:
+    path: "~/.local/lib/claude-wrapper"
+    state: directory
+
+- name: Install the Claude token wrapper
+  file:
+    src: "{{ repo_root }}/scripts/claude"
+    dest: "~/.local/lib/claude-wrapper/claude"
+    state: link
+    force: true
+
 # Codex is the exception: it atomically rewrites ~/.codex/config.toml (which would
 # clobber a symlink) and commingles host state (trusted [projects.*], oss_provider,
 # nux counters, auth) with prefs. So rather than symlink it, overlay just the
 # curated subset (configs/codex/shared.toml) onto the codex-owned local file.
 - name: Merge curated codex settings into the local codex config
   command:
-    cmd: python3 merge_codex_config.py
+    cmd: "{{ ansible_facts['python']['executable'] }} merge_codex_config.py"
     chdir: "{{ coding_agents_source_dir }}"
   register: ca_codex_merge
   changed_when: "'changed:' in ca_codex_merge.stdout"

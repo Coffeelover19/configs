@@ -19,6 +19,8 @@ cowfile: llama
 direnv: true
 zoxide: true
 
+claudex_enabled: true
+
 # Monitor KVM (Philips 49B2U5900CH): Ctrl+Shift+F12 sends a DDC input-switch
 # from this host to the *other* machine on the shared monitor. Ctrl+Shift+F11
 # does the same, then sleeps caeli so its USB-C signal drops and the monitor
