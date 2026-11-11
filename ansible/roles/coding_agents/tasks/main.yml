@@ -176,6 +176,7 @@
     chdir: "{{ coding_agents_source_dir }}"
   register: ca_claude_merge
   changed_when: ca_claude_merge.stdout.startswith('changed:')
+  when: claude_settings_merge | bool
 
 - name: Install Adrafinil's recognised Claude hooks
   command:

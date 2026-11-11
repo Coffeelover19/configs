@@ -16,6 +16,18 @@ merge_claude_settings = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(merge_claude_settings)
 
 
+class RoleGateTests(unittest.TestCase):
+    def test_role_merge_is_switchable_and_off_for_the_terminal_profile(self) -> None:
+        root = Path(__file__).resolve().parent.parent / "ansible"
+        tasks = (root / "roles" / "coding_agents" / "tasks" / "main.yml").read_text()
+        defaults = (root / "roles" / "coding_agents" / "defaults" / "main.yml").read_text()
+        terminal = (root / "inventory" / "host_vars" / "terminal.yml").read_text()
+        merge_task = tasks.split("- name: Merge curated Claude settings", 1)[1].split("\n- name:", 1)[0]
+        self.assertIn("when: claude_settings_merge | bool", merge_task)
+        self.assertIn("claude_settings_merge: true", defaults)
+        self.assertIn("claude_settings_merge: false", terminal)
+
+
 class MergeClaudeSettingsTests(unittest.TestCase):
     def write_json(self, path: Path, value: dict) -> None:
         path.write_text(json.dumps(value) + "\n")

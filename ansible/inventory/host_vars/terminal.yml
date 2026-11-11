@@ -27,6 +27,10 @@ host_roles:
   - terminal_dotfiles
   - coding_agents
 
+# A generic machine keeps its own ~/.claude/settings.json: the curated one
+# carries permissions, hooks and model choices that belong to the repo owner.
+claude_settings_merge: false
+
 # GPT-5.6 through the Claude Code harness (`claudex`). Needs a one-time
 # `claudex --login` per machine; see coding-agents/README.md.
 claudex_enabled: true
