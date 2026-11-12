@@ -77,7 +77,7 @@ Englisch, Markdown, ohne KI-Footer.
 
 **3. Extended description** (Merge-Dialog, Feld 2):
 - Kurzer Commit-Body, Englisch, **hart auf 72 Zeichen umbrochen**. Nach dem
-  Schreiben per Skript prüfen (`awk '{ if (length($0)>72) print NR }'`) und die
+  Schreiben per Skript prüfen (`awk 'length > 72 { print NR }'`) und die
   Datei im Scratchpad ablegen; ihren vollen Pfad nennen.
 - Was und warum, Abweichungen vom Standard, Breaking-Änderungen ausdrücklich
   ("Breaking: …"), Deploy-Hinweis nur wenn nötig. Keine Klassennamen-Listen.
