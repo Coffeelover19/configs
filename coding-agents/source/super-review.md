@@ -69,6 +69,7 @@ Present: the architectural map, the synthesized findings (🔴/🟡/🟢, simpli
 
 ## Principles
 
+- Number every finding consecutively across the complete report, including recommended improvements, simplicity findings, and production findings. Keep those identifiers stable during fixes and re-review.
 - **Fresh eyes are the point.** Don't pre-bias the fleet with your own conclusions.
 - **Synthesize, don't relay.** One deduped, ranked list beats seven raw reports.
 - **Match the codebase.** Judge against the patterns in the same area, not personal preference.
