@@ -56,6 +56,10 @@ The goal is successful communication: after one read, I understand what happened
 - This machine is one of three I work on, and any given repository is one of many. Machine-local agent memory (per-project memory dirs) does not travel between them. If something is worth remembering long-term, put it where it syncs instead: repo-specific knowledge in that repository's AGENTS.md, cross-repo preferences here in the global AGENTS.md. Both are living documents — edit them as understanding evolves, don't treat them as append-only.
 - Keep local memory for what is genuinely machine-, session-, or in-flight-local: host paths, coordination between concurrent sessions, work-in-progress state.
 
+## Vocabulary
+
+- **R<n>** (e.g. R14) means Release <n> of the Kolai/Epistree platform. When I say something "must go into R14", I mean the upcoming release. There is no GitHub label, milestone or project field for it.
+
 ## Git
 
 - Merging or landing a PR requires explicit user authorization. A goal of eventually getting work merged, a request to make PRs merge-ready, or a generic "proceed" after a review/fix plan does not authorize the merge itself. Stop once the PR is green and merge-ready, report that state, and ask before merging unless the user explicitly said to merge or land it.
