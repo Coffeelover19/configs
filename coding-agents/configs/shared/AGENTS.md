@@ -58,7 +58,7 @@ The goal is successful communication: after one read, I understand what happened
 
 ## Vocabulary
 
-- **R<n>** (e.g. R14) means Release <n> of the Kolai/Epistree platform. When I say something "must go into R14", I mean the upcoming release. There is no GitHub label, milestone or project field for it.
+- **R<n>** (e.g. R14) means Release <n> of the Kolai/Epistree platform; when I say something "must go into R14", I mean the upcoming release. It maps to the `Epistree/infrastructure` release card titled `Release YY-0NN` (label `release`; R14 = `Release 26-014`). There is no label, milestone or project field for it in the app repos; an issue is hard-bound to a release by attaching it to that card (see `docs/release-flow.md` there).
 
 ## Git
 
