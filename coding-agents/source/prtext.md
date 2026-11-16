@@ -1,5 +1,5 @@
 ---
-description: "Use when asked to look at a pull request (e.g. schau dir pr N an) or to write PR text, title or merge message for it in an Epistree repo (frontend-react, backend-core, microservices, infrastructure). Reads the linked issue, checks what the code really does against main, then delivers PR description, title and extended description in that order."
+description: "Use when asked to look at a pull request (e.g. schau dir pr N an) or to write PR text, title or merge message for it in an Epistree repo (frontend-react, backend-core, microservices, infrastructure). Reads the linked issue and the code, then outputs only the merge title and the extended description."
 mode: skill
 ---
 
@@ -38,56 +38,32 @@ Prüfe außerdem:
 - Ungültige Referenzen (`Refs #N`, das im Repo nicht existiert) und veraltete
   Zahlen im PR-Text.
 
-## 3. Ausgabe: genau diese Reihenfolge
+## 3. Ausgabe: nur zwei Texte, sonst nichts
 
-Zuerst kurz auf Deutsch, dann die drei Texte.
+Gib **ausschließlich** aus (keine Zusammenfassung, kein Vorspann, keine
+PR-Beschreibung, keine Hinweisliste):
 
-**Vorspann (knapp, deutsch):**
-- *Worum es geht* (Issue, 2-4 Sätze)
-- *Was wirklich gemacht wurde* (aus dem Diff, Stichpunkte, inkl. CI-Stand)
-- *Wo du beim händischen Testen hinschauen sollst* (konkrete Klickwege/Aufrufe)
-- *Auffälligkeiten* (Footer, falsche Refs, nicht Geprüftes, Abweichungen PR-Text
-  zu Code)
-
-Prägnant halten. Der Nutzer hat mehrfach gesagt: kürzer, nicht Text
-nacherzählen, sondern den Code beschreiben.
-
-**1. PR-Beschreibung** (ins Beschreibungsfeld des PR, nicht als Kommentar):
-
-```
-## Architectural map
-### What and how
-### Invariants        (✓ / ⚠ / ✗, mit dem Test genannt, der es absichert)
-### Call-chain
-### Where to look when X breaks
-### Decisions
-## Reviewer's reading guide
-### Read closely
-### Skim
-## Verification
-## Deploy impact      (explizit "None." wenn nichts)
-## Non-goals
-```
-Englisch, Markdown, ohne KI-Footer.
-
-**2. Titel** (PR-Titel = Merge-Titel; GitHub hängt `(#N)` selbst an):
+**1. Titel** (PR-Titel = Merge-Titel; GitHub hängt `(#N)` selbst an):
 - **beginnt mit einer Zahl** = Issue-Nummer, danach kebab-case, englisch,
   kleingeschrieben, z. B. `1321-settings-render-route-dialogs-at-the-modal-portal`
 - Bei kombinierten PRs die Leit-Issue-Nummer.
 
-**3. Extended description** (Merge-Dialog, Feld 2):
+**2. Extended description** (Merge-Dialog, Feld 2):
 - Kurzer Commit-Body, Englisch, **hart auf 72 Zeichen umbrochen**. Nach dem
   Schreiben per Skript prüfen (`awk 'length > 72 { print NR }'`) und die
   Datei im Scratchpad ablegen; ihren vollen Pfad nennen.
 - Was und warum, Abweichungen vom Standard, Breaking-Änderungen ausdrücklich
   ("Breaking: …"), Deploy-Hinweis nur wenn nötig. Keine Klassennamen-Listen.
+- Beschreibt den **Endstand des Codes**, nicht den PR-Text und nicht
+  Zwischenstände der Commits.
 - Footer, je Zeile eine Referenz: `Closes #N` (vollständige Lösung),
   `Related to #N` (Teil/Verwandtes), `Refs Owner/repo#N` (andere Repos).
 - Kein Co-Authored-By, keine KI-Hinweise.
 
-Alle drei Texte jeweils in einem eigenen Codeblock mit der Überschrift
-"1. PR-Beschreibung", "2. Titel", "3. Extended description", damit klar ist,
-was in welches Feld kommt.
+Beide Texte jeweils in einem eigenen Codeblock mit der Überschrift
+"Titel" und "Extended description". Nur wenn etwas den Merge falsch machen
+würde (CI rot, `Closes` auf ein Issue, das nicht gelöst wird, PR-Footer mit
+KI-Hinweis), **eine** kurze Zeile darunter, sonst nichts.
 
 ## Nicht tun
 
