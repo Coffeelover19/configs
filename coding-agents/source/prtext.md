@@ -38,10 +38,9 @@ Prüfe außerdem:
 - Ungültige Referenzen (`Refs #N`, das im Repo nicht existiert) und veraltete
   Zahlen im PR-Text.
 
-## 3. Ausgabe: nur zwei Texte, sonst nichts
+## 3. Ausgabe
 
-Gib **ausschließlich** aus (keine Zusammenfassung, kein Vorspann, keine
-PR-Beschreibung, keine Hinweisliste):
+Nur das hier, ohne Vorspann und ohne Zusammenfassung:
 
 **1. Titel** (PR-Titel = Merge-Titel; GitHub hängt `(#N)` selbst an):
 - **beginnt mit einer Zahl** = Issue-Nummer, danach kebab-case, englisch,
@@ -52,18 +51,24 @@ PR-Beschreibung, keine Hinweisliste):
 - Kurzer Commit-Body, Englisch, **hart auf 72 Zeichen umbrochen**. Nach dem
   Schreiben per Skript prüfen (`awk 'length > 72 { print NR }'`) und die
   Datei im Scratchpad ablegen; ihren vollen Pfad nennen.
-- Was und warum, Abweichungen vom Standard, Breaking-Änderungen ausdrücklich
-  ("Breaking: …"), Deploy-Hinweis nur wenn nötig. Keine Klassennamen-Listen.
-- Beschreibt den **Endstand des Codes**, nicht den PR-Text und nicht
-  Zwischenstände der Commits.
+- Beschreibt den **Endstand des Codes**, nicht den PR-Text und nicht die
+  Zwischenstände der Commits. Was und warum, Abweichungen vom Standard,
+  "Breaking: …" ausdrücklich, Deploy-Hinweis nur wenn nötig.
 - Footer, je Zeile eine Referenz: `Closes #N` (vollständige Lösung),
   `Related to #N` (Teil/Verwandtes), `Refs Owner/repo#N` (andere Repos).
 - Kein Co-Authored-By, keine KI-Hinweise.
 
-Beide Texte jeweils in einem eigenen Codeblock mit der Überschrift
-"Titel" und "Extended description". Nur wenn etwas den Merge falsch machen
-würde (CI rot, `Closes` auf ein Issue, das nicht gelöst wird, PR-Footer mit
-KI-Hinweis), **eine** kurze Zeile darunter, sonst nichts.
+**3. PR-Beschreibung, nur wenn die vorhandene nicht zum Code passt**
+(falsche Zahlen, überholte Aussagen, nicht mehr existierende Namen):
+- Die **vorhandene Beschreibung des PR in ihrer eigenen Struktur** (gleiche
+  Überschriften, gleiche Reihenfolge) komplett ausgeben, mit nur den
+  korrigierten Stellen geändert. Nichts umschreiben, nichts umstrukturieren,
+  keine neuen Abschnitte im "Architectural map"-Format.
+- Passt sie, ausdrücklich nichts ausgeben.
+
+Jeder Text in einem eigenen Codeblock mit Überschrift. Eine kurze Zeile
+darunter nur, wenn etwas den Merge falsch machen würde (CI rot, `Closes` auf
+ein nicht gelöstes Issue, KI-Footer im PR-Body).
 
 ## Nicht tun
 
